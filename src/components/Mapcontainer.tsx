@@ -16,8 +16,52 @@ const GlobalMapContainer: React.FC = () => {
 
   const geoDataRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
+  const lastRenderRef = useRef<number>(0);
 
   const [isLoaded, setIsLoaded] = useState(false);
+
+  const computeFeatureBbox = (feature: any) => {
+    const coords = feature?.geometry?.coordinates;
+    let minLng = 180;
+    let minLat = 90;
+    let maxLng = -180;
+    let maxLat = -90;
+    const scan = (arr: any) => {
+      for (const item of arr || []) {
+        if (Array.isArray(item)) {
+          if (typeof item[0] === "number" && typeof item[1] === "number") {
+            const lng = item[0];
+            const lat = item[1];
+            if (lng < minLng) minLng = lng;
+            if (lat < minLat) minLat = lat;
+            if (lng > maxLng) maxLng = lng;
+            if (lat > maxLat) maxLat = lat;
+          } else {
+            scan(item);
+          }
+        }
+      }
+    };
+    scan(coords);
+    return [minLng, minLat, maxLng, maxLat];
+  };
+
+  const bboxIntersects = (bbox: number[], bounds: any) => {
+    if (!bbox || !bounds) return false;
+    const sw = bounds.getSouthWest ? bounds.getSouthWest() : bounds.southwest;
+    const ne = bounds.getNorthEast ? bounds.getNorthEast() : bounds.northeast;
+    const minLng = sw.lng;
+    const minLat = sw.lat;
+    const maxLng = ne.lng;
+    const maxLat = ne.lat;
+    const [bMinLng, bMinLat, bMaxLng, bMaxLat] = bbox;
+    return !(
+      bMaxLng < minLng ||
+      bMinLng > maxLng ||
+      bMaxLat < minLat ||
+      bMinLat > maxLat
+    );
+  };
 
   // 2. 加载本地数据
   useEffect(() => {
@@ -29,6 +73,11 @@ const GlobalMapContainer: React.FC = () => {
         const data = await response.json();
 
         if (data && data.features) {
+          for (const f of data.features) {
+            if (!f.__bbox) {
+              f.__bbox = computeFeatureBbox(f);
+            }
+          }
           geoDataRef.current = data;
           console.log("数据已就绪，要素数量:", data.features.length);
           setIsLoaded(true);
@@ -47,11 +96,27 @@ const GlobalMapContainer: React.FC = () => {
 
     if (!mapInstance || !data || !AMap?.GeoJSON) return;
 
+    const now = Date.now();
+    if (now - lastRenderRef.current < 150) return;
+    lastRenderRef.current = now;
+
+    const zoom = mapInstance.getZoom();
+    if (zoom < 4) {
+      mapInstance.clearMap();
+      return;
+    }
+
+    const bounds = mapInstance.getBounds();
+    const featuresInView = data.features.filter((f: any) =>
+      bboxIntersects(f.__bbox || computeFeatureBbox(f), bounds)
+    );
+    const subset = { type: "FeatureCollection", features: featuresInView };
+
     mapInstance.clearMap();
 
     try {
       const geojson = new AMap.GeoJSON({
-        geoJSON: data,
+        geoJSON: subset,
         getPolygon: (json: any, lnglats: any) => {
           return new AMap.Polygon({
             path: lnglats,
@@ -80,18 +145,23 @@ const GlobalMapContainer: React.FC = () => {
       });
 
       mapInstance.add(geojson);
-      mapInstance.setFitView();
     } catch (e) {
       console.error("渲染GeoJSON图层失败:", e);
     }
   };
 
-  // 当数据加载标记改变或地图组件渲染时尝试绘图
   useEffect(() => {
-    if (isLoaded) {
-      const timer = setTimeout(renderGeoLayer, 500);
-      return () => clearTimeout(timer);
-    }
+    if (!isLoaded) return;
+    const mapInstance = mapRef.current?.map;
+    if (!mapInstance) return;
+    const handler = () => renderGeoLayer();
+    renderGeoLayer();
+    mapInstance.on("moveend", handler);
+    mapInstance.on("zoomend", handler);
+    return () => {
+      mapInstance.off("moveend", handler);
+      mapInstance.off("zoomend", handler);
+    };
   }, [isLoaded]);
 
   return (
