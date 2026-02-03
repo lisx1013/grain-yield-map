@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Map as AMapContainer, APILoader } from "@uiw/react-amap";
 
-// 1. 高德安全密钥
 if (typeof window !== "undefined") {
   (window as any)._AMapSecurityConfig = {
     securityJsCode:
@@ -13,115 +12,57 @@ if (typeof window !== "undefined") {
 
 const GlobalMapContainer: React.FC = () => {
   const [selectedInfo, setSelectedInfo] = useState<any>(null);
-
   const geoDataRef = useRef<any>(null);
+  const centersRef = useRef<any>({}); // ✅ 新增：用于存储后端 API 返回的中心点数据
   const mapRef = useRef<any>(null);
-  const lastRenderRef = useRef<number>(0);
-
+  const geojsonLayerRef = useRef<any>(null);
+  const lastSelectedPolygon = useRef<any>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  const computeFeatureBbox = (feature: any) => {
-    const coords = feature?.geometry?.coordinates;
-    let minLng = 180;
-    let minLat = 90;
-    let maxLng = -180;
-    let maxLat = -90;
-    const scan = (arr: any) => {
-      for (const item of arr || []) {
-        if (Array.isArray(item)) {
-          if (typeof item[0] === "number" && typeof item[1] === "number") {
-            const lng = item[0];
-            const lat = item[1];
-            if (lng < minLng) minLng = lng;
-            if (lat < minLat) minLat = lat;
-            if (lng > maxLng) maxLng = lng;
-            if (lat > maxLat) maxLat = lat;
-          } else {
-            scan(item);
-          }
-        }
-      }
-    };
-    scan(coords);
-    return [minLng, minLat, maxLng, maxLat];
-  };
-
-  const bboxIntersects = (bbox: number[], bounds: any) => {
-    if (!bbox || !bounds) return false;
-    const sw = bounds.getSouthWest ? bounds.getSouthWest() : bounds.southwest;
-    const ne = bounds.getNorthEast ? bounds.getNorthEast() : bounds.northeast;
-    const minLng = sw.lng;
-    const minLat = sw.lat;
-    const maxLng = ne.lng;
-    const maxLat = ne.lat;
-    const [bMinLng, bMinLat, bMaxLng, bMaxLat] = bbox;
-    return !(
-      bMaxLng < minLng ||
-      bMinLng > maxLng ||
-      bMaxLat < minLat ||
-      bMinLat > maxLat
-    );
-  };
-
-  // 2. 加载本地数据
+  // 1. 加载数据：同时加载 GeoJSON 和 行政中心 API
   useEffect(() => {
-    const loadLocalGeoJSON = async () => {
+    const initData = async () => {
       try {
-        const response = await fetch("/data/convert.json");
-        if (!response.ok) throw new Error("文件读取失败");
+        // 加载地图边界数据
+        const geoRes = await fetch("/data/convert.json");
+        const geoData = await geoRes.json();
 
-        const data = await response.json();
+        try {
+          const centerRes = await fetch(
+            "http://10.0.3.4:5000/api/gpkg/query?file=file1&column=country&value=中国"
+          );
+          const centerData = await centerRes.json();
+          centersRef.current = centerData;
+        } catch (e) {
+          console.warn("中心点 API 加载失败，将使用前端自动计算兜底", e);
+        }
 
-        if (data && data.features) {
-          for (const f of data.features) {
-            if (!f.__bbox) {
-              f.__bbox = computeFeatureBbox(f);
-            }
-          }
-          geoDataRef.current = data;
-          console.log("数据已就绪，要素数量:", data.features.length);
+        if (geoData && geoData.features) {
+          geoDataRef.current = geoData;
           setIsLoaded(true);
         }
       } catch (err) {
-        console.error("加载数据出错:", err);
+        console.error("初始化失败:", err);
       }
     };
-    loadLocalGeoJSON();
+    initData();
   }, []);
 
   const renderGeoLayer = () => {
     const AMap = (window as any).AMap;
     const mapInstance = mapRef.current?.map;
-    const data = geoDataRef.current;
+    if (!mapInstance || !geoDataRef.current || !AMap?.GeoJSON) return;
 
-    if (!mapInstance || !data || !AMap?.GeoJSON) return;
-
-    const now = Date.now();
-    if (now - lastRenderRef.current < 150) return;
-    lastRenderRef.current = now;
-
-    const zoom = mapInstance.getZoom();
-    if (zoom < 4) {
-      mapInstance.clearMap();
-      return;
-    }
-
-    const bounds = mapInstance.getBounds();
-    const featuresInView = data.features.filter((f: any) =>
-      bboxIntersects(f.__bbox || computeFeatureBbox(f), bounds)
-    );
-    const subset = { type: "FeatureCollection", features: featuresInView };
-
-    mapInstance.clearMap();
+    if (geojsonLayerRef.current) mapInstance.remove(geojsonLayerRef.current);
 
     try {
       const geojson = new AMap.GeoJSON({
-        geoJSON: subset,
+        geoJSON: geoDataRef.current,
         getPolygon: (json: any, lnglats: any) => {
           return new AMap.Polygon({
             path: lnglats,
             fillOpacity: 0.5,
-            fillColor: "#40E0D0", // 青色
+            fillColor: "#40E0D0",
             strokeColor: "#ffffff",
             strokeWeight: 1,
             bubble: true,
@@ -129,39 +70,58 @@ const GlobalMapContainer: React.FC = () => {
             extData: json.properties,
           });
         },
-        getMarker: () => new AMap.Marker({ visible: false }),
       });
 
       geojson.on("click", (e: any) => {
         const props = e.target.getExtData();
+        const currentPolygon = e.target;
+
         if (props) {
+          // 高亮逻辑
+          if (lastSelectedPolygon.current) {
+            lastSelectedPolygon.current.setOptions({
+              fillColor: "#40E0D0",
+              fillOpacity: 0.5,
+            });
+          }
+          currentPolygon.setOptions({ fillColor: "#ffeb3b", fillOpacity: 0.8 });
+          lastSelectedPolygon.current = currentPolygon;
+
           setSelectedInfo({
             id: props.ID || props.id || "N/A",
             name: props.admin_name || props.name || "行政区域",
-            yieldVal: props.yield_val || 0,
+            yieldVal: props.yield_val || props.yieldVal || 0,
           });
-          mapInstance.setFitView(e.target);
+
+          // ✅ 2. 【核心修改：使用后端 API 的中心点进行定位】
+          const adminName = props.admin_name || props.name;
+          const apiCenter = centersRef.current[adminName]; // 从 API 数据中匹配
+
+          let finalCenter;
+          if (apiCenter && Array.isArray(apiCenter)) {
+            // 如果 API 有数据，用 API 的
+            finalCenter = new AMap.LngLat(apiCenter[0], apiCenter[1]);
+          } else {
+            // 如果 API 没数据，用前端计算兜底
+            finalCenter = currentPolygon.getBounds().getCenter();
+          }
+
+          if (finalCenter) {
+            // 放大并移动到该中心
+            mapInstance.setZoomAndCenter(8, finalCenter, false, 500);
+          }
         }
       });
 
+      geojsonLayerRef.current = geojson;
       mapInstance.add(geojson);
     } catch (e) {
-      console.error("渲染GeoJSON图层失败:", e);
+      console.error("渲染失败:", e);
     }
   };
 
   useEffect(() => {
-    if (!isLoaded) return;
-    const mapInstance = mapRef.current?.map;
-    if (!mapInstance) return;
-    const handler = () => renderGeoLayer();
-    renderGeoLayer();
-    mapInstance.on("moveend", handler);
-    mapInstance.on("zoomend", handler);
-    return () => {
-      mapInstance.off("moveend", handler);
-      mapInstance.off("zoomend", handler);
-    };
+    if (isLoaded) renderGeoLayer();
   }, [isLoaded]);
 
   return (
@@ -171,6 +131,7 @@ const GlobalMapContainer: React.FC = () => {
         height: "100vh",
         position: "relative",
         background: "#00050a",
+        overflow: "hidden",
       }}
     >
       <APILoader
@@ -188,27 +149,84 @@ const GlobalMapContainer: React.FC = () => {
 
       {/* 侧边栏 */}
       <div
-        className={`fixed top-0 right-0 w-1/3 h-full transition-transform duration-300 z-1001 p-10 
-          ${selectedInfo ? "translate-x-0" : "translate-x-full"} bg-white/90 backdrop-blur-md shadow-2xl`}
+        style={{
+          position: "fixed",
+          top: "0",
+          right: "0",
+          width: "380px",
+          height: "100%",
+          backgroundColor: "rgba(255, 255, 255, 0.95)",
+          backdropFilter: "blur(20px)",
+          boxShadow: "-10px 0 30px rgba(0,0,0,0.5)",
+          zIndex: 99999,
+          transform: selectedInfo ? "translateX(0)" : "translateX(100%)",
+          transition: "transform 0.4s cubic-bezier(0.22, 1, 0.36, 1)",
+          padding: "40px",
+          display: "flex",
+          flexDirection: "column",
+          color: "#0f172a",
+        }}
       >
         {selectedInfo && (
-          <div className="text-slate-900">
-            <h2 className="text-3xl font-black">{selectedInfo.name}</h2>
-            <div className="mt-10 p-6 bg-blue-50/50 rounded-2xl">
-              <p className="text-xs text-blue-500 font-bold uppercase mb-2">
+          <>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "40px",
+              }}
+            >
+              <h2 style={{ fontSize: "28px", fontWeight: 900, margin: 0 }}>
+                {selectedInfo.name}
+              </h2>
+              <button
+                onClick={() => {
+                  setSelectedInfo(null);
+                  if (lastSelectedPolygon.current) {
+                    lastSelectedPolygon.current.setOptions({
+                      fillColor: "#40E0D0",
+                      fillOpacity: 0.5,
+                    });
+                  }
+                }}
+                style={{
+                  border: "none",
+                  background: "#f1f5f9",
+                  borderRadius: "50%",
+                  width: "36px",
+                  height: "36px",
+                  cursor: "pointer",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div
+              style={{
+                padding: "30px",
+                background: "linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%)",
+                borderRadius: "24px",
+                color: "#fff",
+                marginBottom: "30px",
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  opacity: 0.7,
+                  marginBottom: "10px",
+                }}
+              >
                 预测产量
               </p>
-              <p className="text-5xl font-black text-blue-600">
+              <p style={{ fontSize: "56px", fontWeight: 900, margin: 0 }}>
                 {selectedInfo.yieldVal}
               </p>
             </div>
-            <button
-              onClick={() => setSelectedInfo(null)}
-              className="mt-10 p-2 text-slate-400"
-            >
-              关闭
-            </button>
-          </div>
+          </>
         )}
       </div>
     </div>
