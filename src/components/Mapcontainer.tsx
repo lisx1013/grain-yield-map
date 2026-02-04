@@ -28,8 +28,9 @@ const GlobalMapContainer: React.FC = () => {
 
         try {
           const centerRes = await fetch(
-            "http://10.0.3.4:5000/api/gpkg/query?file=file1&column=country&value=中国"
+            "/api/gpkg/query?file=file1&column=country&value=中国"
           );
+
           const centerData = await centerRes.json();
           centersRef.current = centerData;
         } catch (e) {
