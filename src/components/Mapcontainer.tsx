@@ -3,22 +3,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { Map as AMapContainer, APILoader } from "@uiw/react-amap";
 import type { FeatureCollection } from "geojson";
 
-/* =========================
-   本地产量兜底数据（明天交差用）
-   ========================= */
-const LOCAL_YIELD_MAP: Record<string, number> = {
-  Henan: 6500,
-  Shandong: 6200,
-  Heilongjiang: 7500,
-  Sichuan: 4800,
-  Anhui: 4100,
-  Hunan: 4300,
-  Hubei: 3900,
-  Jiangsu: 4500,
-  Hebei: 3600,
-  Guangdong: 2900,
-  DEFAULT: 4000,
-};
+import countries from "i18n-iso-countries";
+import zhLocale from "i18n-iso-countries/langs/zh.json";
+
+countries.registerLocale(zhLocale);
 
 if (typeof window !== "undefined") {
   (window as any)._AMapSecurityConfig = {
@@ -28,139 +16,159 @@ if (typeof window !== "undefined") {
 
 const GlobalMapContainer: React.FC = () => {
   const mapRef = useRef<any>(null);
-  const geojsonLayerRef = useRef<any>(null);
-  const lastPolygonRef = useRef<any>(null);
-
-  const geoDataRef = useRef<FeatureCollection | null>(null);
+  const printedRef = useRef(false);
+  const countryPolygonsRef = useRef<any[]>([]);
+  const countryDataRef = useRef<FeatureCollection | null>(null);
 
   const [loaded, setLoaded] = useState(false);
-  const [selectedInfo, setSelectedInfo] = useState<any>(null);
+  const [selectedCountry, setSelectedCountry] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const lastPolygonRef = useRef<any>(null);
 
   /* =========================
-     1. 加载 GeoJSON（不缓存，避免爆 storage）
-     ========================= */
+     加载 GeoJSON
+  ========================= */
   useEffect(() => {
-    const loadGeo = async () => {
+    const load = async () => {
       try {
-        const res = await fetch("/data/convert.json");
-        const data = await res.json();
-        geoDataRef.current = data;
+        const countryRes = await fetch("/data/world_country.json");
+        countryDataRef.current = await countryRes.json();
         setLoaded(true);
-      } catch (e) {
-        console.error("❌ GeoJSON 加载失败", e);
+      } catch (err) {
+        console.error("GeoJSON加载失败:", err);
       }
     };
-    loadGeo();
+
+    load();
   }, []);
 
   /* =========================
-     2. 产量接口 + 本地兜底
-     ========================= */
-  const fetchRegionYield = async (regionName: string) => {
-    const url = `/api/map/region-data?country=${encodeURIComponent("中国")}`;
-    console.log("➡️ 请求产量接口:", url);
+     清空图层
+  ========================= */
+  const clearPolygons = () => {
+    const map = mapRef.current?.map;
+    if (!map) return;
+
+    countryPolygonsRef.current.forEach((p) => map.remove(p));
+    countryPolygonsRef.current = [];
+  };
+
+  /* =========================
+     查询国家产量
+  ========================= */
+  const fetchProduction = async (englishName: string, iso3: string) => {
+    setLoading(true);
 
     try {
-      const res = await fetch(url);
-      const text = await res.text();
+      const chineseName = countries.getName(iso3, "zh") || englishName;
 
-      // 接口未命中（返回 HTML）
-      if (text.trim().startsWith("<")) {
-        throw new Error("HTML response");
-      }
+      const res = await fetch(`http://10.0.3.4:5000/api/crops/production`);
 
-      const data = JSON.parse(text);
+      const data = await res.json();
 
-      return (
-        data?.yield ??
-        data?.yield_value ??
-        data?.production ??
-        data?.data?.yield ??
-        0
+      const countryRows = data.data.filter(
+        (item: any) =>
+          item.country.replace(/\s/g, "") === chineseName.replace(/\s/g, "")
       );
-    } catch {
-      console.warn("⚠️ 接口不可用，使用本地产量兜底:", regionName);
-      return LOCAL_YIELD_MAP[regionName] ?? LOCAL_YIELD_MAP.DEFAULT;
+
+      setSelectedCountry({
+        name: chineseName,
+        crops: countryRows,
+      });
+    } catch (err) {
+      console.error("产量接口请求失败:", err);
+
+      setSelectedCountry({
+        name: englishName,
+        crops: [],
+      });
     }
+
+    setLoading(false);
   };
 
   /* =========================
-     3. 渲染 GeoJSON 图层
-     ========================= */
-  const renderGeoLayer = () => {
+     渲染国家
+  ========================= */
+  const renderCountryOnce = () => {
     const map = mapRef.current?.map;
     const AMap = (window as any).AMap;
-    if (!map || !geoDataRef.current || !AMap?.GeoJSON) return;
 
-    if (geojsonLayerRef.current) {
-      map.remove(geojsonLayerRef.current);
-    }
+    if (!map || !countryDataRef.current) return;
 
-    const geojson = new AMap.GeoJSON({
-      geoJSON: geoDataRef.current,
-      getPolygon: (json: any, lnglats: any) =>
-        new AMap.Polygon({
-          path: lnglats,
-          fillColor: "#40E0D0",
-          fillOpacity: 0.5,
-          strokeColor: "#ffffff",
-          strokeWeight: 1,
-          bubble: true,
-          cursor: "pointer",
-          extData: json.properties,
-        }),
-    });
+    clearPolygons();
 
-    geojson.on("click", async (e: any) => {
-      const polygon = e.target;
-      const props = polygon.getExtData();
+    countryDataRef.current.features.forEach((feature) => {
+      if (!feature.geometry) return;
 
-      const regionName = props?.name || props?.admin_name || "DEFAULT";
+      const coords: any = (feature.geometry as any).coordinates;
+      const props: any = feature.properties;
 
-      console.log("🗺️ 点击区域:", regionName);
-
-      if (lastPolygonRef.current) {
-        lastPolygonRef.current.setOptions({
-          fillColor: "#40E0D0",
-          fillOpacity: 0.5,
-        });
+      if (!printedRef.current) {
+        console.log("国家属性字段:", props);
+        printedRef.current = true;
       }
 
-      polygon.setOptions({
-        fillColor: "#ffeb3b",
-        fillOpacity: 0.85,
+      const englishName =
+        props?.country ||
+        props?.ADMIN ||
+        props?.NAME ||
+        props?.name ||
+        "Unknown";
+
+      const iso3 = props?.iso3 || "";
+
+      const polygon = new AMap.Polygon({
+        path: coords,
+        fillColor: "#2563eb",
+        fillOpacity: 0.35,
+        strokeColor: "#ffffff",
+        strokeWeight: 1,
+        zIndex: 10,
+        cursor: "pointer",
       });
-      lastPolygonRef.current = polygon;
 
-      const yieldVal = await fetchRegionYield(regionName);
+      polygon.on("click", () => {
+        if (lastPolygonRef.current) {
+          lastPolygonRef.current.setOptions({
+            fillColor: "#2563eb",
+            fillOpacity: 0.35,
+          });
+        }
 
-      setSelectedInfo({
-        name: regionName,
-        yieldVal,
+        polygon.setOptions({
+          fillColor: "#facc15",
+          fillOpacity: 0.8,
+        });
+
+        lastPolygonRef.current = polygon;
+
+        fetchProduction(englishName, iso3);
       });
 
-      map.setZoomAndCenter(7, polygon.getBounds().getCenter());
+      map.add(polygon);
+      countryPolygonsRef.current.push(polygon);
     });
-
-    geojsonLayerRef.current = geojson;
-    map.add(geojson);
   };
 
   /* =========================
-     4. 地图初始化
-     ========================= */
+     初始化地图
+  ========================= */
   useEffect(() => {
     if (!loaded) return;
 
     const timer = setInterval(() => {
       const map = mapRef.current?.map;
+
       if (!map) return;
 
       map.setCenter([105, 36]);
-      map.setZoom(5);
+      map.setZoom(3);
       map.setMapStyle("amap://styles/dark");
 
-      renderGeoLayer();
+      renderCountryOnce();
+
       clearInterval(timer);
     }, 100);
 
@@ -169,36 +177,90 @@ const GlobalMapContainer: React.FC = () => {
 
   return (
     <div style={{ width: "100%", height: "100vh" }}>
-      <APILoader
-        akey={import.meta.env.VITE_AMAP_KEY}
-        plugins={["AMap.GeoJSON"]}
-      >
+      <APILoader akey={import.meta.env.VITE_AMAP_KEY}>
         <AMapContainer ref={mapRef} style={{ width: "100%", height: "100%" }} />
       </APILoader>
 
-      {/* 右侧信息栏 */}
+      {/* 侧边栏 */}
       <div
         style={{
           position: "fixed",
           right: 0,
           top: 0,
-          width: 360,
+          width: 420,
           height: "100%",
           background: "#ffffff",
-          padding: 32,
-          boxShadow: "-8px 0 24px rgba(0,0,0,.2)",
-          transform: selectedInfo ? "translateX(0)" : "translateX(100%)",
-          transition: "0.4s",
+          boxShadow: "-10px 0 30px rgba(0,0,0,.3)",
+          transform: selectedCountry ? "translateX(0)" : "translateX(100%)",
+          transition: "0.35s ease",
           zIndex: 9999,
+          display: "flex",
+          flexDirection: "column",
         }}
       >
-        {selectedInfo && (
+        {selectedCountry && (
           <>
-            <h2>{selectedInfo.name}</h2>
-            <p style={{ fontSize: 12, color: "#64748b" }}>预测产量</p>
-            <p style={{ fontSize: 48, fontWeight: 800 }}>
-              {selectedInfo.yieldVal}
-            </p>
+            {/* Header */}
+            <div
+              style={{
+                padding: "20px 24px",
+                borderBottom: "1px solid #e5e7eb",
+                display: "flex",
+                justifyContent: "space-between",
+              }}
+            >
+              <h2>{selectedCountry.name}</h2>
+
+              <button
+                onClick={() => setSelectedCountry(null)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  fontSize: 22,
+                  cursor: "pointer",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 内容 */}
+            <div style={{ padding: 24, overflowY: "auto" }}>
+              {loading && <p>加载中...</p>}
+
+              {!loading && selectedCountry.crops?.length === 0 && (
+                <p>暂无数据</p>
+              )}
+
+              {!loading &&
+                selectedCountry.crops?.map((item: any, index: number) => (
+                  <div
+                    key={index}
+                    style={{
+                      background: "#f8fafc",
+                      padding: 16,
+                      borderRadius: 10,
+                      marginBottom: 16,
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.1)",
+                    }}
+                  >
+                    <div style={{ marginBottom: 8 }}>
+                      <strong>作物种类：</strong>
+                      {item.crop}
+                    </div>
+
+                    <div style={{ marginBottom: 8 }}>
+                      <strong>作物产量：</strong>
+                      {item.production.toLocaleString()}
+                    </div>
+
+                    <div>
+                      <strong>年份：</strong>
+                      {item.year}
+                    </div>
+                  </div>
+                ))}
+            </div>
           </>
         )}
       </div>
