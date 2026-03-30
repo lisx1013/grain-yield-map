@@ -56,7 +56,7 @@ const GlobalMapContainer: React.FC = () => {
     load();
   }, []);
 
-  // --- 加载全球产量数据 (用于侧边栏饼图) ---
+  // --- 加载全球产量数据 ---
   useEffect(() => {
     const loadProduction = async () => {
       try {
@@ -70,11 +70,11 @@ const GlobalMapContainer: React.FC = () => {
     loadProduction();
   }, []);
 
-  // --- 东北三省预测 API 调用 ---
+  // --- 核心修改 1：增加“小麦”到请求列表 ---
   const fetchNortheastData = async () => {
     setNeLoading(true);
     const regions = ["黑龙江", "吉林", "辽宁"];
-    const crops = ["水稻", "玉米", "大豆"];
+    const crops = ["水稻", "玉米", "大豆", "小麦"]; // 此处已增加小麦
     const newData: any = {};
 
     try {
@@ -87,7 +87,6 @@ const GlobalMapContainer: React.FC = () => {
                   `http://10.0.3.4:5000/api/prediction/yield?region=${encodeURIComponent(region)}&crop=${encodeURIComponent(crop)}`
                 );
                 const json = await res.json();
-                // 直接存储 API 返回的数据 (包含 years 和 yield 数组)
                 return { crop, data: json.data };
               } catch {
                 return { crop, data: { years: [], yield: [] } };
@@ -190,19 +189,17 @@ const GlobalMapContainer: React.FC = () => {
     return () => clearInterval(timer);
   }, [loaded]);
 
-  // --- 更新后的图表配置：横轴固定 2018-2023 ---
+  // --- 核心修改 2：更新图表配置，支持 4 种作物及颜色 ---
   const getLineOption = (regionName: string, cropDataArray: any[]) => {
     if (!cropDataArray) return {};
 
-    // 1. 强制设定横轴范围
+    // 强制横轴范围
     const displayYears = [2024, 2025, 2026, 2027, 2028, 2029, 2030];
 
-    // 2. 将平行数组转换为对齐的数据序列
     const series = cropDataArray.map((cropItem: any) => {
       const apiYears = cropItem.data?.years || [];
       const apiYields = cropItem.data?.yield || [];
 
-      // 创建年份映射表
       const dataMap = new Map();
       apiYears.forEach((year: any, index: number) => {
         dataMap.set(Number(year), apiYields[index]);
@@ -214,7 +211,6 @@ const GlobalMapContainer: React.FC = () => {
         smooth: true,
         symbol: "circle",
         symbolSize: 8,
-        // 根据固定年份取值，确保点位不错乱
         data: displayYears.map((y) => (dataMap.has(y) ? dataMap.get(y) : null)),
       };
     });
@@ -226,7 +222,11 @@ const GlobalMapContainer: React.FC = () => {
         textStyle: { color: "#334155", fontSize: 20, fontWeight: "bold" },
       },
       tooltip: { trigger: "axis" },
-      legend: { bottom: "5%", icon: "roundRect" },
+      legend: {
+        bottom: "5%",
+        icon: "roundRect",
+        data: ["水稻", "玉米", "大豆", "小麦"], // 明确图例顺序
+      },
       grid: {
         top: "18%",
         left: "5%",
@@ -248,7 +248,8 @@ const GlobalMapContainer: React.FC = () => {
         splitLine: { lineStyle: { type: "dashed", color: "#e2e8f0" } },
       },
       series: series,
-      color: ["#3b82f6", "#10b981", "#f59e0b"],
+      // 增加了一个紫色 (#a855f7) 供小麦使用
+      color: ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"],
     };
   };
 
@@ -438,7 +439,7 @@ const GlobalMapContainer: React.FC = () => {
             zIndex: 10001,
           }}
         >
-          🚀 正在通过 API 获取预测数据...
+          🚀 正在获取预测数据...
         </div>
       )}
     </div>
