@@ -5,6 +5,8 @@ import type { FeatureCollection } from "geojson";
 
 import ReactECharts from "echarts-for-react";
 
+import "echarts-gl"; // CRITICAL: 必须引入 echarts-gl 才能渲染 3D 图表
+
 import countries from "i18n-iso-countries";
 import zhLocale from "i18n-iso-countries/langs/zh.json";
 
@@ -26,6 +28,7 @@ const GlobalMapContainer: React.FC = () => {
   const [selectedCountry, setSelectedCountry] = useState<any>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false); // 价格预测弹窗
+  const [is3DModalOpen, setIs3DModalOpen] = useState(false); // 3D混合数据弹窗
   const [northeastData, setNortheastData] = useState<any>(null);
   const [priceData, setPriceData] = useState<any>(null); // 世界价格数据
   const [loading, setLoading] = useState(false);
@@ -368,6 +371,148 @@ const GlobalMapContainer: React.FC = () => {
     };
   };
 
+  // --- 生成新增的 3D 柱状图配置 ---
+  const get3DBarOption = () => {
+    // 维度定义：0: 年份, 1: 产量(万吨), 2: 价格(单位/吨), 3: 作物类型
+    const mock3DData = [
+      // 2026
+      [2026, 4500, 2400, "小麦"],
+      [2026, 5200, 1800, "玉米"],
+      [2026, 1800, 4200, "大豆"],
+      [2026, 6000, 2600, "水稻"],
+      // 2027
+      [2027, 4650, 2450, "小麦"],
+      [2027, 5400, 1750, "玉米"],
+      [2027, 1900, 4300, "大豆"],
+      [2027, 6100, 2680, "水稻"],
+      // 2028
+      [2028, 4800, 2500, "小麦"],
+      [2028, 5500, 1900, "玉米"],
+      [2028, 2100, 4100, "大豆"],
+      [2028, 6250, 2750, "水稻"],
+      // 2029
+      [2029, 4900, 2600, "小麦"],
+      [2029, 5700, 2000, "玉米"],
+      [2029, 2200, 4450, "大豆"],
+      [2029, 6300, 2800, "水稻"],
+      // 2030
+      [2030, 5100, 2550, "小麦"],
+      [2030, 5900, 2100, "玉米"],
+      [2030, 2350, 4600, "大豆"],
+      [2030, 6500, 2900, "水稻"],
+    ];
+
+    return {
+      title: {
+        text: "全球主要作物多维时空预测 (年份 - 产量 - 价格)",
+        left: "center",
+        textStyle: { color: "#334155", fontSize: 20, fontWeight: "bold" },
+      },
+      tooltip: {
+        formatter: (params: any) => {
+          const val = params.value;
+          return `<b>${val[3]} (${val[0]}年)</b><br/>
+                  预期产量: ${val[1]} 万吨<br/>
+                  预期价格: ${val[2]} 单位/吨`;
+        },
+      },
+      visualMap: {
+        max: 6500,
+        inRange: {
+          color: [
+            "#313695",
+            "#4575b4",
+            "#74add1",
+            "#abd9e9",
+            "#e0f3f8",
+            "#ffffbf",
+            "#fee090",
+            "#fdae61",
+            "#f46d43",
+            "#d73027",
+            "#a50026",
+          ],
+        },
+        componentIndex: 0,
+        dimension: 1, // 绑定产量颜色映射
+        orient: "horizontal",
+        left: "center",
+        bottom: "2%",
+        text: ["高产量", "低产量"],
+        textStyle: { color: "#334155" },
+      },
+      dataset: {
+        dimensions: ["年份", "产量", "价格", "作物"],
+        source: mock3DData,
+      },
+      xAxis3D: {
+        type: "category",
+        name: "年份",
+        title2d: "年",
+        axisLabel: { textStyle: { color: "#334155" } },
+      },
+      yAxis3D: {
+        type: "value",
+        name: "产量(万吨)",
+        axisLabel: { textStyle: { color: "#334155" } },
+      },
+      zAxis3D: {
+        type: "value",
+        name: "价格(单位/吨)",
+        axisLabel: { textStyle: { color: "#334155" } },
+      },
+      grid3D: {
+        boxWidth: 100,
+        boxDepth: 80,
+        boxHeight: 80,
+        viewControl: {
+          projection: "perspective",
+          autoRotate: true,
+          autoRotateSpeed: 6,
+          beta: 25,
+          alpha: 20,
+        },
+        light: {
+          main: {
+            intensity: 1.2,
+            shadow: true,
+          },
+          ambient: {
+            intensity: 0.4,
+          },
+        },
+      },
+      series: [
+        {
+          type: "bar3D",
+          shading: "lambert",
+          encode: {
+            x: "年份",
+            y: "产量",
+            z: "价格",
+            tooltip: [0, 1, 2, 3],
+          },
+          label: {
+            show: false,
+          },
+          emphasis: {
+            label: {
+              show: true,
+              formatter: (p: any) => p.value[3],
+              textStyle: {
+                fontSize: 16,
+                color: "#000",
+                backgroundColor: "#fff",
+                padding: 4,
+                borderRadius: 4,
+              },
+            },
+          },
+        },
+      ],
+    };
+  };
+
   const groupByYear = (data: any[]) => {
     const map: Record<string, any[]> = {};
     data.forEach((item) => {
@@ -386,7 +531,7 @@ const GlobalMapContainer: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* 搜索栏 & 价格预测按钮 */}
+      {/* 搜索栏 & 价格预测按钮 & 新增的3D混合视图按钮 */}
       <div
         style={{
           position: "absolute",
@@ -456,6 +601,41 @@ const GlobalMapContainer: React.FC = () => {
           }}
         >
           📈 价格预测
+        </button>
+
+        {/* 新增：浅蓝色 3D 图表弹窗触发按钮 */}
+        <button
+          onClick={() => setIs3DModalOpen(true)}
+          style={{
+            background: "#60a5fa",
+            color: "white",
+            border: "none",
+            padding: "10px 20px",
+            borderRadius: "30px",
+            cursor: "pointer",
+            boxShadow: "0 4px 15px rgba(0,0,0,0.3)",
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+          }}
+          title="多维作物时空预测"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="12" y1="20" x2="12" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+          多维时空推演
         </button>
       </div>
 
@@ -728,6 +908,105 @@ const GlobalMapContainer: React.FC = () => {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 新增：3D 柱状图时空预测弹窗 */}
+      {is3DModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            backgroundColor: "rgba(0,0,0,0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+          }}
+          onClick={() => setIs3DModalOpen(false)}
+        >
+          <div
+            style={{
+              width: "85%",
+              maxWidth: "1100px",
+              height: "80vh",
+              backgroundColor: "#ffffff",
+              borderRadius: "24px",
+              padding: "35px",
+              display: "flex",
+              flexDirection: "column",
+              position: "relative",
+              boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "15px",
+                borderBottom: "1px solid #f1f5f9",
+                paddingBottom: "15px",
+              }}
+            >
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "10px" }}
+              >
+                <span style={{ fontSize: "24px" }}>📊</span>
+                <h2 style={{ margin: 0, color: "#1e293b" }}>
+                  三维混合数据多维分析
+                </h2>
+              </div>
+              <button
+                onClick={() => setIs3DModalOpen(false)}
+                style={{
+                  border: "none",
+                  background: "#f1f5f9",
+                  color: "#64748b",
+                  width: 40,
+                  height: 40,
+                  borderRadius: "50%",
+                  cursor: "pointer",
+                  fontSize: "18px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "background 0.2s",
+                }}
+                onMouseOver={(e) =>
+                  (e.currentTarget.style.background = "#e2e8f0")
+                }
+                onMouseOut={(e) =>
+                  (e.currentTarget.style.background = "#f1f5f9")
+                }
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ flex: 1, width: "100%", minHeight: 0 }}>
+              <ReactECharts
+                option={get3DBarOption()}
+                style={{ width: "100%", height: "100%" }}
+                opts={{ renderer: "canvas" }}
+              />
+            </div>
+
+            <div
+              style={{
+                fontSize: "13px",
+                color: "#64748b",
+                marginTop: "10px",
+                textAlign: "right",
+              }}
+            >
+              * 提示：鼠标按住左键拖拽可旋转视角，鼠标滚轮可缩放图表大小。
             </div>
           </div>
         </div>

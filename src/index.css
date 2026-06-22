@@ -1,4 +1,5 @@
+@import "tailwindcss";
+
 @theme {
   /* 这里可以自定义主题，暂时留空即可 */
 }
-@import "tailwindcss";
