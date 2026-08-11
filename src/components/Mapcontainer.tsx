@@ -27,6 +27,23 @@ interface ChatMessage {
   text: string;
 }
 
+// 🟢 扩展常用别名字典，绑定到标准的 ISO3 码
+const ALIAS_MAP: Record<string, string> = {
+  usa: "USA",
+  us: "USA",
+  美国: "USA",
+  美利坚合众国: "USA",
+  uk: "GBR",
+  英国: "GBR",
+  大不列颠及北爱尔兰联合王国: "GBR",
+  大不列颠: "GBR",
+  俄罗斯: "RUS",
+  俄国: "RUS",
+  中国: "CHN",
+  日本: "JPN",
+  韩国: "KOR",
+};
+
 const GlobalMapContainer: React.FC = () => {
   const mapRef = useRef<any>(null);
   const countryPolygonsRef = useRef<any[]>([]);
@@ -38,7 +55,7 @@ const GlobalMapContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false); // 价格预测弹窗
   const [is3DModalOpen, setIs3DModalOpen] = useState(false); // 3D混合数据弹窗
-  const [northeastData, setNortheastData] = useState<any[]>([]); // 修改为数组类型初始值
+  const [northeastData, setNortheastData] = useState<any[]>([]);
   const [priceData, setPriceData] = useState<any>(null); // 世界价格数据
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -46,7 +63,7 @@ const GlobalMapContainer: React.FC = () => {
   const lastPolygonRef = useRef<any>(null);
 
   // ==========================================
-  // --- 🟢 自定义云服务器聊天入口状态与UI ---
+  // --- 🟢 AI 智能助手相关状态 ---
   // ==========================================
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
@@ -64,31 +81,24 @@ const GlobalMapContainer: React.FC = () => {
     },
   ]);
 
-  // 用于跟踪多轮对话的 conversation_id 状态
   const [conversationId, setConversationId] = useState<string | null>(null);
-  // 固定当前用户的 user_id
   const currentUserId = "user001";
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 消息自动滚动到底部
   useEffect(() => {
     if (isChatOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [chatMessages, isChatOpen]);
 
-  // 处理发送消息逻辑
   const handleSendMessage = async () => {
     if (!chatInput.trim()) return;
 
     const userText = chatInput.trim();
 
-    // 1. 同步加入用户自身的消息到面板，并清空输入框
     setChatMessages((prev) => [...prev, { sender: "user", text: userText }]);
     setChatInput("");
-
-    // 2. 在列表中追加一条 AI 的“...”占位，充当 Loading 状态
     setChatMessages((prev) => [...prev, { sender: "ai", text: "..." }]);
 
     let detectedCrop = "";
@@ -133,7 +143,7 @@ const GlobalMapContainer: React.FC = () => {
       }
 
       setChatMessages((prev) => {
-        const filtered = prev.slice(0, -1); // 移除最后一条“...”
+        const filtered = prev.slice(0, -1);
         return [...filtered, { sender: "ai", text: aiReply }];
       });
     } catch (err) {
@@ -151,12 +161,37 @@ const GlobalMapContainer: React.FC = () => {
     }
   };
 
+  // 🟢 辅助工具：安全提取 GeoJSON 要素中的 ISO3 字段
+  const extractISO3 = (props: any): string => {
+    if (!props) return "";
+    return (
+      props.iso3 ||
+      props.ISO_A3 ||
+      props.ADM0_A3 ||
+      props.iso_a3 ||
+      props.id ||
+      ""
+    ).toUpperCase();
+  };
+
+  // 🟢 辅助工具：安全提取 GeoJSON 要素中的国家名称
+  const extractCountryName = (props: any): string => {
+    if (!props) return "Unknown";
+    return (
+      props.country || props.ADMIN || props.NAME || props.name || "Unknown"
+    );
+  };
+
   // --- 国家名称归一化 ---
   const normalizeCountryName = (name: string) => {
     const clean = name.replace(/\s/g, "");
     const map: Record<string, string> = {
       俄罗斯: "俄罗斯联邦",
       美国: "美利坚合众国",
+      英国: "大不列颠及北爱尔兰联合王国",
+      "United Kingdom": "大不列颠及北爱尔兰联合王国",
+      "United States of America": "美利坚合众国",
+      "United States": "美利坚合众国",
     };
     return map[clean] || clean;
   };
@@ -191,20 +226,15 @@ const GlobalMapContainer: React.FC = () => {
     loadProduction();
   }, []);
 
-  // 🛠️ 核心修改：完全使用纯前端 Mock 拦截，年份统一对齐为 2026-2030
   const fetchNortheastData = async () => {
     setLoading(true);
     const regions = ["黑龙江", "吉林", "辽宁"];
     const crops = ["水稻", "玉米", "大豆", "小麦"];
 
     try {
-      // 模拟一个小小的延迟，让加载动画转一下，体验更真实
       await new Promise((resolve) => setTimeout(resolve, 250));
-
-      // 统一的未来预测年份
       const targetYears = [2026, 2027, 2028, 2029, 2030];
 
-      // 全量本地静态库数据映射（裁剪/对齐为 5 位未来年份点）
       const staticDb: Record<string, Record<string, number[]>> = {
         黑龙江: {
           水稻: [2685.5, 2663.5, 2896.2, 2913.7, 2718],
@@ -214,7 +244,7 @@ const GlobalMapContainer: React.FC = () => {
         },
         吉林: {
           水稻: [663, 663, 663, 663, 663],
-          小麦: [0, 0, 0, 0, 0], // 吉林-小麦兜底保底数据
+          小麦: [0, 0, 0, 0, 0],
           玉米: [3140, 3140, 3140, 3140, 3140],
           大豆: [62.75, 77.04, 72.82, 62.56, 79.94],
         },
@@ -226,7 +256,6 @@ const GlobalMapContainer: React.FC = () => {
         },
       };
 
-      // 组装成前端图表渲染需要的标准格式
       const newData = regions.map((region) => {
         const pureRegion = region.replace("中国-", "");
         const regionResults = crops.map((crop) => {
@@ -255,7 +284,6 @@ const GlobalMapContainer: React.FC = () => {
     }
   };
 
-  // 获取世界价格预测数据
   const fetchGlobalPriceData = async () => {
     setLoading(true);
     const countriesList = [
@@ -324,62 +352,104 @@ const GlobalMapContainer: React.FC = () => {
 
   const fetchProduction = (englishName: string, iso3: string) => {
     try {
-      const chineseName = iso3
-        ? countries.getName(iso3, "zh") || englishName
-        : englishName;
+      let chineseName = "";
+      if (iso3) {
+        chineseName = countries.getName(iso3, "zh") || "";
+      }
+      if (!chineseName) {
+        chineseName = englishName;
+      }
+
       const normalizedQueryName = normalizeCountryName(chineseName);
+
       const countryRows = productionDataRef.current.filter((item: any) => {
-        const apiName = item.country.replace(/\s/g, "");
+        const apiName = normalizeCountryName(item.country.replace(/\s/g, ""));
         return apiName === normalizedQueryName;
       });
-      setSelectedCountry({ name: chineseName, crops: countryRows });
+
+      setSelectedCountry({ name: normalizedQueryName, crops: countryRows });
     } catch (err) {
       console.error("筛选失败:", err);
       setSelectedCountry({ name: englishName, crops: [] });
     }
   };
 
+  // 切换多边形高亮状态的通用方法
+  const highlightPolygon = (
+    targetPolygon: any,
+    englishName: string,
+    iso3: string
+  ) => {
+    if (lastPolygonRef.current) {
+      lastPolygonRef.current.setOptions({
+        fillColor: "#2563eb",
+        fillOpacity: 0.35,
+      });
+    }
+    targetPolygon.setOptions({ fillColor: "#fef9c3", fillOpacity: 0.8 });
+    lastPolygonRef.current = targetPolygon;
+    fetchProduction(englishName, iso3);
+  };
+
+  // 🟢 修复点 1 & 2：搜索逻辑（去除了视角移动，优化了多边形关联）
   const handleSearch = () => {
     if (!searchQuery.trim() || !countryDataRef.current) return;
-    const query = searchQuery.trim().toLowerCase();
-    const foundFeature = countryDataRef.current.features.find((f: any) => {
+    const rawQuery = searchQuery.trim();
+    const query = rawQuery.toLowerCase();
+
+    const mappedISO3 = ALIAS_MAP[rawQuery] || ALIAS_MAP[query];
+
+    const matchedFeatures = countryDataRef.current.features.filter((f: any) => {
       const props = f.properties ?? {};
-      const zhName = props.iso3
-        ? countries.getName(props.iso3, "zh") || ""
-        : "";
-      const enName = (props.country || props.ADMIN || "").toLowerCase();
-      return zhName.includes(query) || enName.includes(query);
+      const iso3 = extractISO3(props);
+      const enName = extractCountryName(props).toLowerCase();
+      const zhName = iso3 ? countries.getName(iso3, "zh") || "" : "";
+
+      if (mappedISO3 && iso3 === mappedISO3) return true;
+      if (iso3 && iso3.toLowerCase() === query) return true;
+      if (zhName && zhName.includes(rawQuery)) return true;
+      if (enName && enName.includes(query)) return true;
+
+      return false;
     });
 
-    if (foundFeature) {
-      const props = foundFeature.properties ?? {};
+    if (matchedFeatures.length > 0) {
+      let targetFeature = matchedFeatures[0];
+      if (
+        mappedISO3 === "USA" ||
+        query === "usa" ||
+        rawQuery.includes("美国")
+      ) {
+        const mainUSA = matchedFeatures.find((f: any) => {
+          const name = extractCountryName(f.properties).toLowerCase();
+          return (
+            name.includes("united states of america") ||
+            name === "united states"
+          );
+        });
+        if (mainUSA) targetFeature = mainUSA;
+      }
+
+      const props = targetFeature.properties ?? {};
+      const targetIso3 = extractISO3(props);
+      const targetName = extractCountryName(props);
+
       const targetPolygon = countryPolygonsRef.current.find(
-        (p) => p.getExtData()?.iso3 === props.iso3
+        (p) => p.getExtData()?.iso3 === targetIso3
       );
+
       if (targetPolygon) {
-        if (lastPolygonRef.current) {
-          lastPolygonRef.current.setOptions({
-            fillColor: "#2563eb",
-            fillOpacity: 0.35,
-          });
-        }
-        targetPolygon.setOptions({ fillColor: "#fef9c3", fillOpacity: 0.8 });
-        lastPolygonRef.current = targetPolygon;
-        fetchProduction(
-          props.country || props.ADMIN || "Unknown",
-          props.iso3 || ""
-        );
-        const map = mapRef.current?.map;
-        if (map) {
-          const path = targetPolygon.getPath();
-          if (path && path.length > 0) map.setCenter(path[0]);
-        }
+        // 仅高亮并调取数据，删除了任何移动/缩放视角（map.setCenter/setZoom）的代码
+        highlightPolygon(targetPolygon, targetName, targetIso3);
+      } else {
+        alert("地图未渲染该区域");
       }
     } else {
-      alert("未找到该国家");
+      alert("未找到该国家，请检查输入的名称");
     }
   };
 
+  // 🟢 渲染地图与 Marker 逻辑
   const renderCountryOnce = () => {
     const map = mapRef.current?.map;
     const AMap = (window as any).AMap;
@@ -389,8 +459,8 @@ const GlobalMapContainer: React.FC = () => {
     countryDataRef.current.features.forEach((feature) => {
       const coords: any = (feature.geometry as any).coordinates;
       const props: any = feature.properties ?? {};
-      const englishName = props.country || props.ADMIN || "Unknown";
-      const iso3 = props.iso3 || "";
+      const englishName = extractCountryName(props);
+      const iso3 = extractISO3(props);
 
       const polygon = new AMap.Polygon({
         path: coords,
@@ -400,30 +470,31 @@ const GlobalMapContainer: React.FC = () => {
         strokeWeight: 1,
         zIndex: 10,
         cursor: "pointer",
-        extData: { iso3 },
+        extData: { iso3, englishName },
+        bubble: true, // 允许事件顺畅传递
       });
 
-      polygon.on("click", () => {
-        if (lastPolygonRef.current) {
-          lastPolygonRef.current.setOptions({
-            fillColor: "#2563eb",
-            fillOpacity: 0.35,
-          });
-        }
-        polygon.setOptions({ fillColor: "#fef9c3", fillOpacity: 0.8 });
-        lastPolygonRef.current = polygon;
-        fetchProduction(englishName, iso3);
+      polygon.on("click", (e: any) => {
+        // 阻止高德地图默认行为影响
+        if (e && e.stopPropagation) e.stopPropagation();
+        highlightPolygon(polygon, englishName, iso3);
       });
+
       map.add(polygon);
       countryPolygonsRef.current.push(polygon);
     });
 
+    // 东北预测标记点：提升 zIndex 至 99999 避免任何图层遮挡，确保 100% 可被点击
     const neMarker = new AMap.Marker({
       position: [126.63, 45.75],
-      content: `<div style="background:#ff4d4f; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,0.4);"><span style="color:white; font-size:18px;">📍</span></div>`,
-      zIndex: 100,
+      content: `<div style="background:#ff4d4f; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,0.4);"><span style="color:white; font-size:18px;">📍</span></div>`,
+      zIndex: 99999,
+      bubble: false,
     });
-    neMarker.on("click", fetchNortheastData);
+    neMarker.on("click", (e: any) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      fetchNortheastData();
+    });
     map.add(neMarker);
   };
 
@@ -448,7 +519,6 @@ const GlobalMapContainer: React.FC = () => {
   ) => {
     if (!cropDataArray || !Array.isArray(cropDataArray)) return {};
 
-    // 统一处理为 2026-2030 年份展示
     const displayYears = [2026, 2027, 2028, 2029, 2030];
 
     const series = cropDataArray.map((cropItem: any) => {
@@ -468,7 +538,7 @@ const GlobalMapContainer: React.FC = () => {
         smooth: true,
         symbol: "circle",
         symbolSize: 8,
-        data: displayYears.map((y) => (dataMap.has(y) ? dataMap.get(y) : 0)), // 防止渲染 Null
+        data: displayYears.map((y) => (dataMap.has(y) ? dataMap.get(y) : 0)),
       };
     });
 
@@ -501,7 +571,7 @@ const GlobalMapContainer: React.FC = () => {
       },
       yAxis: {
         type: "value",
-        name: type === "yield" ? "产量 (万吨)" : "价格 (单位/吨)",
+        name: type === "yield" ? "产量 (万吨)" : "价格 (元/吨)",
         splitLine: { lineStyle: { type: "dashed", color: "#e2e8f0" } },
       },
       series: series,
@@ -544,7 +614,7 @@ const GlobalMapContainer: React.FC = () => {
           const val = params.value;
           return `<b>${val[3]} (${val[0]}年)</b><br/>
                   预期产量: ${val[1]} 万吨<br/>
-                  预期价格: ${val[2]} 单位/吨`;
+                  预期价格: ${val[2]} 元/吨`;
         },
       },
       visualMap: {
@@ -589,7 +659,7 @@ const GlobalMapContainer: React.FC = () => {
       },
       zAxis3D: {
         type: "value",
-        name: "价格(单位/吨)",
+        name: "价格(元/吨)",
         axisLabel: { textStyle: { color: "#334155" } },
       },
       grid3D: {
@@ -650,13 +720,11 @@ const GlobalMapContainer: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* 控制 AI 消息内部 Markdown 样式的全局小 CSS 注入 */}
       <style>{`
         .coze-web-sdk-trigger-container,
         div[class*="coze-web-sdk-trigger"] {
           display: none !important;
         }
-        /* AI 消息内部的特定富文本排版强化 */
         .ai-markdown-content p {
           margin: 0 0 8px 0;
         }
@@ -727,7 +795,6 @@ const GlobalMapContainer: React.FC = () => {
           </button>
         </div>
 
-        {/* 价格预测按钮 */}
         <button
           onClick={fetchGlobalPriceData}
           style={{
@@ -747,7 +814,6 @@ const GlobalMapContainer: React.FC = () => {
           📈 价格预测
         </button>
 
-        {/* 3D 图表弹窗触发按钮 */}
         <button
           onClick={() => setIs3DModalOpen(true)}
           style={{
@@ -782,7 +848,6 @@ const GlobalMapContainer: React.FC = () => {
           多维时空推演
         </button>
 
-        {/* AI 智能助手开关切换 */}
         <button
           onClick={() => setIsChatOpen(!isChatOpen)}
           style={{
@@ -827,7 +892,6 @@ const GlobalMapContainer: React.FC = () => {
             border: "1px solid #f1f5f9",
           }}
         >
-          {/* 弹窗头部 */}
           <div
             style={{
               padding: "16px 20px",
@@ -859,7 +923,6 @@ const GlobalMapContainer: React.FC = () => {
             </button>
           </div>
 
-          {/* 消息列表区 */}
           <div
             style={{
               flex: 1,
@@ -964,7 +1027,6 @@ const GlobalMapContainer: React.FC = () => {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* 底部输入框区域 */}
           <div
             style={{
               padding: "14px",
@@ -1026,7 +1088,6 @@ const GlobalMapContainer: React.FC = () => {
           zIndex: 9999,
           display: "flex",
           flexDirection: "column",
-          color: "red",
         }}
       >
         {selectedCountry && (
@@ -1037,9 +1098,22 @@ const GlobalMapContainer: React.FC = () => {
                 borderBottom: "1px solid #e5e7eb",
                 display: "flex",
                 justifyContent: "space-between",
+                alignItems: "center",
               }}
             >
-              <h2 style={{ margin: 0 }}>{selectedCountry.name}</h2>
+              <h2 style={{ margin: 0, color: "#1e293b" }}>
+                {selectedCountry.name}
+                <span
+                  style={{
+                    fontSize: "14px",
+                    color: "#64748b",
+                    fontWeight: "normal",
+                    marginLeft: "8px",
+                  }}
+                >
+                  （单位：吨）
+                </span>
+              </h2>
               <button
                 onClick={() => setSelectedCountry(null)}
                 style={{
@@ -1053,35 +1127,47 @@ const GlobalMapContainer: React.FC = () => {
               </button>
             </div>
             <div style={{ padding: 24, overflowY: "auto" }}>
-              {Object.entries(groupByYear(selectedCountry.crops)).map(
-                ([year, rows], idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      marginBottom: 40,
-                      padding: 16,
-                      background: "#f8fafc",
-                      borderRadius: 10,
-                    }}
-                  >
-                    <h3>{year}年产量</h3>
-                    <ReactECharts
-                      option={{
-                        tooltip: { trigger: "item" },
-                        series: [
-                          {
-                            type: "pie",
-                            radius: "60%",
-                            data: rows.map((r) => ({
-                              value: r.production,
-                              name: r.crop,
-                            })),
-                          },
-                        ],
+              {Object.keys(groupByYear(selectedCountry.crops)).length === 0 ? (
+                <div
+                  style={{
+                    color: "#64748b",
+                    textAlign: "center",
+                    marginTop: 40,
+                  }}
+                >
+                  暂无该国家粮食产量历史数据
+                </div>
+              ) : (
+                Object.entries(groupByYear(selectedCountry.crops)).map(
+                  ([year, rows], idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        marginBottom: 40,
+                        padding: 16,
+                        background: "#f8fafc",
+                        borderRadius: 10,
                       }}
-                      style={{ height: 300 }}
-                    />
-                  </div>
+                    >
+                      <h3 style={{ color: "#334155" }}>{year}年产量</h3>
+                      <ReactECharts
+                        option={{
+                          tooltip: { trigger: "item" },
+                          series: [
+                            {
+                              type: "pie",
+                              radius: "60%",
+                              data: rows.map((r) => ({
+                                value: r.production,
+                                name: r.crop,
+                              })),
+                            },
+                          ],
+                        }}
+                        style={{ height: 300 }}
+                      />
+                    </div>
+                  )
                 )
               )}
             </div>
@@ -1157,7 +1243,6 @@ const GlobalMapContainer: React.FC = () => {
                 gap: "25px",
               }}
             >
-              {/* 💡 修复重点：northeastData 已被重构为数组结构，需使用 .map 方式优雅循环 */}
               {northeastData.map((item: any) => (
                 <div
                   key={item.region}
