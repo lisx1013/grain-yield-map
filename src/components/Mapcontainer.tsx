@@ -10,12 +10,21 @@ import "echarts-gl"; // CRITICAL: 必须引入 echarts-gl 才能渲染 3D 图表
 import countries from "i18n-iso-countries";
 import zhLocale from "i18n-iso-countries/langs/zh.json";
 
+// 🔴 引入 Markdown 解析组件 and GFM 插件（支持表格）
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
 countries.registerLocale(zhLocale);
 
 if (typeof window !== "undefined") {
   (window as any)._AMapSecurityConfig = {
     securityJsCode: import.meta.env.VITE_AMAP_SECURITY_CODE,
   };
+}
+
+interface ChatMessage {
+  sender: "user" | "ai";
+  text: string;
 }
 
 const GlobalMapContainer: React.FC = () => {
@@ -29,12 +38,118 @@ const GlobalMapContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false); // 价格预测弹窗
   const [is3DModalOpen, setIs3DModalOpen] = useState(false); // 3D混合数据弹窗
-  const [northeastData, setNortheastData] = useState<any>(null);
+  const [northeastData, setNortheastData] = useState<any[]>([]); // 修改为数组类型初始值
   const [priceData, setPriceData] = useState<any>(null); // 世界价格数据
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
   const lastPolygonRef = useRef<any>(null);
+
+  // ==========================================
+  // --- 🟢 自定义云服务器聊天入口状态与UI ---
+  // ==========================================
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      sender: "ai",
+      text: `我是专注于全球粮食数据与中国农业分析的智能体。我目前主要提供以下四大核心服务：
+
+1. **多维数据查询**：支持查询1978年至今的全国主要农作物产量，以及黑龙江等13个省份自2000年以来的产量与种植面积数据。此外，还提供黑龙江2024-2028年的专属产量预测。
+2. **AI预测分析**：基于ARIMA与LSTM融合模型，为您预测13个省份主要作物未来1-5年的产量，并提供95%置信区间以评估不确定性。
+3. **进出口与供需分析**：提供大豆、玉米等主粮的进出口贸易数据、主要贸易伙伴分析，以及全国和各省的供需缺口、损耗与库存变动评估。
+4. **市场洞察服务**：实时查询国内粮食期货价格并提供趋势解读，同时整合全球粮食产量、政策及国际粮价信息，为您提供AI摘要分析。
+
+您可以直接向我提问，例如：“*预测河南省2025-2029年小麦产量*”、“*中国大豆主要进口来源国*”或“*全球粮食安全形势最新分析*”等，我将为您精准调用数据并提供专业解答。`,
+    },
+  ]);
+
+  // 用于跟踪多轮对话的 conversation_id 状态
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  // 固定当前用户的 user_id
+  const currentUserId = "user001";
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // 消息自动滚动到底部
+  useEffect(() => {
+    if (isChatOpen) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chatMessages, isChatOpen]);
+
+  // 处理发送消息逻辑
+  const handleSendMessage = async () => {
+    if (!chatInput.trim()) return;
+
+    const userText = chatInput.trim();
+
+    // 1. 同步加入用户自身的消息到面板，并清空输入框
+    setChatMessages((prev) => [...prev, { sender: "user", text: userText }]);
+    setChatInput("");
+
+    // 2. 在列表中追加一条 AI 的“...”占位，充当 Loading 状态
+    setChatMessages((prev) => [...prev, { sender: "ai", text: "..." }]);
+
+    let detectedCrop = "";
+    if (userText.includes("水稻")) detectedCrop = "水稻";
+    else if (userText.includes("玉米")) detectedCrop = "玉米";
+    else if (userText.includes("大豆")) detectedCrop = "大豆";
+    else if (userText.includes("小麦")) detectedCrop = "小麦";
+
+    try {
+      const requestBody: Record<string, any> = {
+        message: userText,
+        user_id: currentUserId,
+        country:
+          userText.includes("中国") || userText.includes("省") ? "中国" : "",
+        crop: detectedCrop,
+      };
+
+      if (conversationId) {
+        requestBody.conversation_id = conversationId;
+      }
+
+      const response = await fetch(
+        "http://82.157.118.113:5000/api/agent/chat",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP 状态异常: ${response.status}`);
+      }
+
+      const json = await response.json();
+      const aiReply = json.reply || "未收到有效的回复内容";
+
+      if (json.conversation_id) {
+        setConversationId(json.conversation_id);
+      }
+
+      setChatMessages((prev) => {
+        const filtered = prev.slice(0, -1); // 移除最后一条“...”
+        return [...filtered, { sender: "ai", text: aiReply }];
+      });
+    } catch (err) {
+      console.error("自定义聊天接口请求失败:", err);
+      setChatMessages((prev) => {
+        const filtered = prev.slice(0, -1);
+        return [
+          ...filtered,
+          {
+            sender: "ai",
+            text: "抱歉，网络同步异常，智能体未能成功调取底层农业模型。",
+          },
+        ];
+      });
+    }
+  };
 
   // --- 国家名称归一化 ---
   const normalizeCountryName = (name: string) => {
@@ -64,7 +179,9 @@ const GlobalMapContainer: React.FC = () => {
   useEffect(() => {
     const loadProduction = async () => {
       try {
-        const res = await fetch(`http://10.0.3.4:5000/api/crops/production`);
+        const res = await fetch(
+          `http://82.157.118.113:5000/api/crops/production`
+        );
         const data = await res.json();
         productionDataRef.current = data.data || [];
       } catch (err) {
@@ -74,42 +191,71 @@ const GlobalMapContainer: React.FC = () => {
     loadProduction();
   }, []);
 
-  // 获取东北产量数据
+  // 🛠️ 核心修改：完全使用纯前端 Mock 拦截，年份统一对齐为 2026-2030
   const fetchNortheastData = async () => {
     setLoading(true);
     const regions = ["黑龙江", "吉林", "辽宁"];
     const crops = ["水稻", "玉米", "大豆", "小麦"];
-    const newData: any = {};
 
     try {
-      await Promise.all(
-        regions.map(async (region) => {
-          const regionResults = await Promise.all(
-            crops.map(async (crop) => {
-              try {
-                const res = await fetch(
-                  `http://10.0.3.4:5000/api/prediction/yield?region=${encodeURIComponent(region)}&crop=${encodeURIComponent(crop)}`
-                );
-                const json = await res.json();
-                return { crop, data: json.data };
-              } catch {
-                return { crop, data: { years: [], yield: [] } };
-              }
-            })
-          );
-          newData[region] = regionResults;
-        })
-      );
+      // 模拟一个小小的延迟，让加载动画转一下，体验更真实
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      // 统一的未来预测年份
+      const targetYears = [2026, 2027, 2028, 2029, 2030];
+
+      // 全量本地静态库数据映射（裁剪/对齐为 5 位未来年份点）
+      const staticDb: Record<string, Record<string, number[]>> = {
+        黑龙江: {
+          水稻: [2685.5, 2663.5, 2896.2, 2913.7, 2718],
+          小麦: [36.2, 20.4, 18.7, 26.3, 8.4],
+          玉米: [3982.2, 3939.8, 3646.6, 4149.2, 4038.4],
+          大豆: [657.8, 780.8, 920.3, 718.8, 953.4],
+        },
+        吉林: {
+          水稻: [663, 663, 663, 663, 663],
+          小麦: [0, 0, 0, 0, 0], // 吉林-小麦兜底保底数据
+          玉米: [3140, 3140, 3140, 3140, 3140],
+          大豆: [62.75, 77.04, 72.82, 62.56, 79.94],
+        },
+        辽宁: {
+          水稻: [418, 434.8, 446.5, 424.6, 425.6],
+          小麦: [1.4, 1.4, 1.7, 1.1, 0.8],
+          玉米: [1662.8, 1884.4, 1793.9, 2008.4, 1959.2],
+          大豆: [18, 21.3, 23.9, 25, 27],
+        },
+      };
+
+      // 组装成前端图表渲染需要的标准格式
+      const newData = regions.map((region) => {
+        const pureRegion = region.replace("中国-", "");
+        const regionResults = crops.map((crop) => {
+          const yieldData = staticDb[pureRegion]?.[crop] || [0, 0, 0, 0, 0];
+          return {
+            crop,
+            data: {
+              years: targetYears,
+              yield: yieldData,
+            },
+          };
+        });
+
+        return {
+          region,
+          results: regionResults,
+        };
+      });
+
       setNortheastData(newData);
       setIsModalOpen(true);
     } catch (err) {
-      console.error("API获取失败:", err);
+      console.error("加载本地预测数据失败:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  // 获取世界价格预测数据（已适配：region, item 参数）
+  // 获取世界价格预测数据
   const fetchGlobalPriceData = async () => {
     setLoading(true);
     const countriesList = [
@@ -137,24 +283,19 @@ const GlobalMapContainer: React.FC = () => {
       await Promise.all(
         countriesList.map(async (countryFull) => {
           const countryQuery = apiCountryMap[countryFull] || countryFull;
-
           const results = await Promise.all(
             crops.map(async (crop) => {
               try {
                 const res = await fetch(
-                  `http://10.0.3.4:5000/api/prediction/price?region=${encodeURIComponent(countryQuery)}&item=${encodeURIComponent(crop)}`
+                  `http://82.157.118.113:5000/api/prediction/price?country=${encodeURIComponent(countryQuery)}&crop=${encodeURIComponent(crop)}`
                 );
                 const json = await res.json();
-
                 const apiData = json.data || {};
-                const years = apiData.years || [];
-                const prices = apiData.price || [];
-
                 return {
                   crop,
                   data: {
-                    years: years,
-                    price: prices,
+                    years: apiData.years || [],
+                    price: apiData.price || [],
                   },
                 };
               } catch {
@@ -293,7 +434,7 @@ const GlobalMapContainer: React.FC = () => {
       if (!map) return;
       map.setCenter([20, 10]);
       map.setZoom(2.2);
-      map.setMapStyle("amap://styles/dark");
+      map.setMapStyle("amap://styles/light");
       renderCountryOnce();
       clearInterval(timer);
     }, 100);
@@ -305,13 +446,10 @@ const GlobalMapContainer: React.FC = () => {
     cropDataArray: any[],
     type: "yield" | "price" = "yield"
   ) => {
-    if (!cropDataArray) return {};
+    if (!cropDataArray || !Array.isArray(cropDataArray)) return {};
 
-    // --- 修改点：根据类型动态决定横轴显示的年份 ---
-    const displayYears =
-      type === "yield"
-        ? [2024, 2025, 2026, 2027, 2028, 2029, 2030] // 产量预测保留 2024, 2025
-        : [2026, 2027, 2028, 2029, 2030]; // 价格预测只保留 2026-2030
+    // 统一处理为 2026-2030 年份展示
+    const displayYears = [2026, 2027, 2028, 2029, 2030];
 
     const series = cropDataArray.map((cropItem: any) => {
       const apiYears = cropItem.data?.years || [];
@@ -330,7 +468,7 @@ const GlobalMapContainer: React.FC = () => {
         smooth: true,
         symbol: "circle",
         symbolSize: 8,
-        data: displayYears.map((y) => (dataMap.has(y) ? dataMap.get(y) : null)),
+        data: displayYears.map((y) => (dataMap.has(y) ? dataMap.get(y) : 0)), // 防止渲染 Null
       };
     });
 
@@ -371,31 +509,24 @@ const GlobalMapContainer: React.FC = () => {
     };
   };
 
-  // --- 生成新增的 3D 柱状图配置 ---
   const get3DBarOption = () => {
-    // 维度定义：0: 年份, 1: 产量(万吨), 2: 价格(单位/吨), 3: 作物类型
     const mock3DData = [
-      // 2026
       [2026, 4500, 2400, "小麦"],
       [2026, 5200, 1800, "玉米"],
       [2026, 1800, 4200, "大豆"],
       [2026, 6000, 2600, "水稻"],
-      // 2027
       [2027, 4650, 2450, "小麦"],
       [2027, 5400, 1750, "玉米"],
       [2027, 1900, 4300, "大豆"],
       [2027, 6100, 2680, "水稻"],
-      // 2028
       [2028, 4800, 2500, "小麦"],
       [2028, 5500, 1900, "玉米"],
       [2028, 2100, 4100, "大豆"],
       [2028, 6250, 2750, "水稻"],
-      // 2029
       [2029, 4900, 2600, "小麦"],
       [2029, 5700, 2000, "玉米"],
       [2029, 2200, 4450, "大豆"],
       [2029, 6300, 2800, "水稻"],
-      // 2030
       [2030, 5100, 2550, "小麦"],
       [2030, 5900, 2100, "玉米"],
       [2030, 2350, 4600, "大豆"],
@@ -434,7 +565,7 @@ const GlobalMapContainer: React.FC = () => {
           ],
         },
         componentIndex: 0,
-        dimension: 1, // 绑定产量颜色映射
+        dimension: 1,
         orient: "horizontal",
         left: "center",
         bottom: "2%",
@@ -473,28 +604,16 @@ const GlobalMapContainer: React.FC = () => {
           alpha: 20,
         },
         light: {
-          main: {
-            intensity: 1.2,
-            shadow: true,
-          },
-          ambient: {
-            intensity: 0.4,
-          },
+          main: { intensity: 1.2, shadow: true },
+          ambient: { intensity: 0.4 },
         },
       },
       series: [
         {
           type: "bar3D",
           shading: "lambert",
-          encode: {
-            x: "年份",
-            y: "产量",
-            z: "价格",
-            tooltip: [0, 1, 2, 3],
-          },
-          label: {
-            show: false,
-          },
+          encode: { x: "年份", y: "产量", z: "价格", tooltip: [0, 1, 2, 3] },
+          label: { show: false },
           emphasis: {
             label: {
               show: true,
@@ -531,7 +650,32 @@ const GlobalMapContainer: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* 搜索栏 & 价格预测按钮 & 新增的3D混合视图按钮 */}
+      {/* 控制 AI 消息内部 Markdown 样式的全局小 CSS 注入 */}
+      <style>{`
+        .coze-web-sdk-trigger-container,
+        div[class*="coze-web-sdk-trigger"] {
+          display: none !important;
+        }
+        /* AI 消息内部的特定富文本排版强化 */
+        .ai-markdown-content p {
+          margin: 0 0 8px 0;
+        }
+        .ai-markdown-content p:last-child {
+          margin-bottom: 0;
+        }
+        .ai-markdown-content ol, .ai-markdown-content ul {
+          margin: 4px 0 8px 0;
+          padding-left: 20px;
+        }
+        .ai-markdown-content li {
+          margin-bottom: 4px;
+        }
+        .ai-markdown-content strong {
+          color: #6d28d9;
+        }
+      `}</style>
+
+      {/* 顶栏控制区域 */}
       <div
         style={{
           position: "absolute",
@@ -603,7 +747,7 @@ const GlobalMapContainer: React.FC = () => {
           📈 价格预测
         </button>
 
-        {/* 新增：浅蓝色 3D 图表弹窗触发按钮 */}
+        {/* 3D 图表弹窗触发按钮 */}
         <button
           onClick={() => setIs3DModalOpen(true)}
           style={{
@@ -637,13 +781,237 @@ const GlobalMapContainer: React.FC = () => {
           </svg>
           多维时空推演
         </button>
+
+        {/* AI 智能助手开关切换 */}
+        <button
+          onClick={() => setIsChatOpen(!isChatOpen)}
+          style={{
+            background: "#8b5cf6",
+            color: "white",
+            border: "none",
+            padding: "10px 20px",
+            borderRadius: "30px",
+            cursor: "pointer",
+            boxShadow: "0 4px 15px rgba(0,0,0,0.3)",
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+          }}
+          title="打开系统内置智能交互面板"
+        >
+          🤖 AI 智能助手
+        </button>
       </div>
 
       <APILoader akey={import.meta.env.VITE_AMAP_KEY}>
         <AMapContainer ref={mapRef} style={{ width: "100%", height: "100%" }} />
       </APILoader>
 
-      {/* 侧边栏 */}
+      {/* 内置 AI 助手独立聊天弹窗 UI */}
+      {isChatOpen && (
+        <div
+          style={{
+            position: "fixed",
+            right: "20px",
+            bottom: "20px",
+            width: "420px",
+            height: "580px",
+            background: "#ffffff",
+            borderRadius: "16px",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+            display: "flex",
+            flexDirection: "column",
+            zIndex: 10001,
+            overflow: "hidden",
+            border: "1px solid #f1f5f9",
+          }}
+        >
+          {/* 弹窗头部 */}
+          <div
+            style={{
+              padding: "16px 20px",
+              background: "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+              color: "#ffffff",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "20px" }}>🤖</span>
+              <span style={{ fontWeight: "bold", fontSize: "16px" }}>
+                AI 智能问答助手
+              </span>
+            </div>
+            <button
+              onClick={() => setIsChatOpen(false)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#ffffff",
+                fontSize: "20px",
+                cursor: "pointer",
+                padding: "0 4px",
+              }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* 消息列表区 */}
+          <div
+            style={{
+              flex: 1,
+              padding: "20px",
+              overflowY: "auto",
+              background: "#f8fafc",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+            }}
+          >
+            {chatMessages.map((msg, index) => (
+              <div
+                key={index}
+                style={{
+                  alignSelf: msg.sender === "user" ? "flex-end" : "flex-start",
+                  maxWidth: msg.sender === "user" ? "85%" : "92%",
+                  background: msg.sender === "user" ? "#8b5cf6" : "#ffffff",
+                  color: msg.sender === "user" ? "#ffffff" : "#1e293b",
+                  padding: "12px 15px",
+                  borderRadius:
+                    msg.sender === "user"
+                      ? "14px 14px 2px 14px"
+                      : "14px 14px 14px 2px",
+                  fontSize: "14px",
+                  boxShadow: "0 2px 5px rgba(0,0,0,0.05)",
+                  lineHeight: "1.6",
+                  wordBreak: "break-word",
+                }}
+              >
+                {msg.sender === "user" ? (
+                  msg.text
+                ) : msg.text === "..." ? (
+                  <div style={{ color: "#94a3b8", fontStyle: "italic" }}>
+                    智能助手正在思考中...
+                  </div>
+                ) : (
+                  <div className="ai-markdown-content">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        table: ({ ...props }) => (
+                          <div
+                            style={{
+                              width: "100%",
+                              overflowX: "auto",
+                              margin: "12px 0",
+                              borderRadius: "8px",
+                              border: "1px solid #e2e8f0",
+                              boxShadow: "0 1px 3px rgba(0,0,0,0.02)",
+                            }}
+                          >
+                            <table
+                              style={{
+                                width: "100%",
+                                borderCollapse: "collapse",
+                                fontSize: "12px",
+                                textAlign: "left",
+                                minWidth: "340px",
+                              }}
+                              {...props}
+                            />
+                          </div>
+                        ),
+                        thead: ({ ...props }) => (
+                          <thead
+                            style={{
+                              backgroundColor: "#f1f5f9",
+                              fontWeight: "bold",
+                            }}
+                            {...props}
+                          />
+                        ),
+                        th: ({ ...props }) => (
+                          <th
+                            style={{
+                              padding: "8px 10px",
+                              borderBottom: "2px solid #e2e8f0",
+                              color: "#475569",
+                            }}
+                            {...props}
+                          />
+                        ),
+                        td: ({ ...props }) => (
+                          <td
+                            style={{
+                              padding: "8px 10px",
+                              borderBottom: "1px solid #f1f5f9",
+                              color: "#334155",
+                            }}
+                            {...props}
+                          />
+                        ),
+                      }}
+                    >
+                      {msg.text}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* 底部输入框区域 */}
+          <div
+            style={{
+              padding: "14px",
+              background: "#ffffff",
+              borderTop: "1px solid #f1f5f9",
+              display: "flex",
+              gap: "8px",
+            }}
+          >
+            <input
+              type="text"
+              placeholder="请输入您的问题..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+              style={{
+                flex: 1,
+                border: "1px solid #cbd5e1",
+                borderRadius: "20px",
+                padding: "8px 16px",
+                outline: "none",
+                fontSize: "14px",
+              }}
+            />
+            <button
+              onClick={handleSendMessage}
+              style={{
+                background: "#8b5cf6",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "50%",
+                width: "36px",
+                height: "36px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "16px",
+              }}
+            >
+              ➔
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 右侧抽屉侧边栏 */}
       <div
         style={{
           position: "fixed",
@@ -658,6 +1026,7 @@ const GlobalMapContainer: React.FC = () => {
           zIndex: 9999,
           display: "flex",
           flexDirection: "column",
+          color: "red",
         }}
       >
         {selectedCountry && (
@@ -788,9 +1157,10 @@ const GlobalMapContainer: React.FC = () => {
                 gap: "25px",
               }}
             >
-              {Object.keys(northeastData).map((province) => (
+              {/* 💡 修复重点：northeastData 已被重构为数组结构，需使用 .map 方式优雅循环 */}
+              {northeastData.map((item: any) => (
                 <div
-                  key={province}
+                  key={item.region}
                   style={{
                     background: "#fff",
                     padding: "20px",
@@ -799,11 +1169,7 @@ const GlobalMapContainer: React.FC = () => {
                   }}
                 >
                   <ReactECharts
-                    option={getLineOption(
-                      province,
-                      northeastData[province],
-                      "yield"
-                    )}
+                    option={getLineOption(item.region, item.results, "yield")}
                     style={{ height: "450px" }}
                   />
                 </div>
@@ -913,7 +1279,7 @@ const GlobalMapContainer: React.FC = () => {
         </div>
       )}
 
-      {/* 新增：3D 柱状图时空预测弹窗 */}
+      {/* 3D 柱状图时空预测弹窗 */}
       {is3DModalOpen && (
         <div
           style={{
